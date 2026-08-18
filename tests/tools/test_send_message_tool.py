@@ -626,7 +626,7 @@ class TestSendToPlatformChunking:
             "Search queries:",
             "Dismiss shortcuts:",
         ]
-        assert [call.args[2] for call in add_reaction.await_args_list] == [
+        assert [call.args[3] for call in add_reaction.await_args_list] == [
             "\U0001f50e",
             "\u2705",
         ]

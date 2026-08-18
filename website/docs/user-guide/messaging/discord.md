@@ -421,34 +421,6 @@ Controls whether the bot adds emoji reactions to messages as visual feedback:
 
 Disable this if you find the reactions distracting or if the bot's role doesn't have the **Add Reactions** permission.
 
-#### Plugin-owned reaction actions
-
-Plugin or profile code can attach Discord reaction actions to outbound messages by appending a hidden reaction manifest to text delivered through `send_message`, cron, kanban, MCP delivery, or other standalone send paths. The Discord sender strips the marker before message splitting, sends any Discord-specific message sections, then adds the configured bot reactions to the delivered Discord messages.
-
-This is separate from [`discord.reactions`](#discordreactions): that setting controls Hermes' built-in processing feedback reactions, while reaction manifests are owned by the plugin or profile that emitted the outbound message.
-
-```text
-Decision summary for today.
-[HERMES_REACTION_ACTIONS]{
-  "actions": [
-    {"emoji": "✅", "anchor": "Decision summary"},
-    {"emoji": "🗑️", "anchor": "Decision summary"}
-  ],
-  "discord_messages": [
-    {
-      "content": "Decision summary for today.",
-      "actions": [{"emoji": "✅"}, {"emoji": "🗑️"}]
-    }
-  ]
-}
-```
-
-The manifest is valid only when it contains at least one top-level `actions` entry or one `discord_messages` entry with content or actions. `emoji` is the only required action field; optional fields such as `message_index`, `anchor`, `target_text`, `section`, or `target` help Hermes choose which delivered message should receive the reaction when a send is split into multiple Discord messages. Invalid manifests fail open: the original text is sent unchanged so Hermes does not silently delete user-visible content it could not parse.
-
-When a user reacts to a bot-authored Discord message, subscribed plugins can handle the reaction with [`on_discord_reaction_add`](/user-guide/features/hooks#on_discord_reaction_add). The hook fires only after the normal Discord channel and user gates pass; bot self-reactions and non-bot-authored messages are ignored. Hook callbacks may return best-effort action dicts such as `send_message`, `add_reaction`, `remove_bot_reaction`, or `remove_user_reaction`.
-
-The bot role needs Discord's **Add Reactions** permission to attach manifest reactions, and inbound reaction handling requires the Discord gateway to be running with the plugin loaded.
-
 #### `discord.ignored_channels`
 
 **Type:** string or list — **Default:** `[]`

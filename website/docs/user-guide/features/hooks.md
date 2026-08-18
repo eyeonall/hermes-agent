@@ -1313,6 +1313,26 @@ Callbacks may return a single action dict, a list of action dicts, or `{"actions
 
 Side-effect failures are logged at debug level and do not crash the gateway. The hook receives plain strings only; raw Discord SDK objects, adapter handles, and the bot client are deliberately not part of the stable contract.
 
+Plugins or profile code can attach reaction actions to outbound Discord messages by appending a reaction manifest to text delivered through `send_message`, cron, kanban, MCP delivery, or other send paths. The Discord sender strips the marker before message splitting, sends any Discord-specific message sections, then adds the configured bot reactions to the delivered Discord messages:
+
+```text
+Decision summary for today.
+[HERMES_REACTION_ACTIONS]{
+  "actions": [
+    {"emoji": "✅", "anchor": "Decision summary"},
+    {"emoji": "🗑️", "anchor": "Decision summary"}
+  ],
+  "discord_messages": [
+    {
+      "content": "Decision summary for today.",
+      "actions": [{"emoji": "✅"}, {"emoji": "🗑️"}]
+    }
+  ]
+}
+```
+
+The manifest is valid only when it contains at least one top-level `actions` entry or one `discord_messages` entry with content or actions. `emoji` is the only required action field; optional fields such as `message_index`, `anchor`, `target_text`, `section`, or `target` help Hermes choose which delivered message should receive the reaction when a send is split into multiple Discord messages. Invalid manifests fail open: the original text is sent unchanged so Hermes does not silently delete user-visible content it could not parse.
+
 ---
 
 ### `pre_approval_request`

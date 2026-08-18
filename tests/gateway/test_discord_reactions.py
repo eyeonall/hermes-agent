@@ -59,6 +59,7 @@ class FakeTree:
 def adapter():
     config = PlatformConfig(enabled=True, token="***")
     adapter = DiscordAdapter(config)
+    adapter._allowed_user_ids = {"42"}
     adapter._client = SimpleNamespace(
         tree=FakeTree(),
         get_channel=lambda _id: None,
@@ -156,8 +157,10 @@ def _make_reaction_payload(user_id=42, member=None, emoji="\u2705"):
     )
 
 
-def _fake_reaction_channel(message):
+def _fake_reaction_channel(message, *, channel_id=123, name="email-important"):
     return SimpleNamespace(
+        id=channel_id,
+        name=name,
         fetch_message=AsyncMock(return_value=message),
         send=AsyncMock(),
     )
@@ -246,6 +249,56 @@ async def test_raw_reaction_add_user_on_bot_message_invokes_hook(adapter, monkey
 
 
 @pytest.mark.asyncio
+async def test_raw_reaction_add_non_allowed_channel_does_not_fetch_message(
+    adapter, monkeypatch
+):
+    invoke = _install_reaction_hook(monkeypatch, [])
+    channel = _fake_reaction_channel(_fake_bot_message(), channel_id=123)
+    adapter._client = _client_with_channel(channel)
+    adapter._allowed_user_ids = set()
+    monkeypatch.setattr(adapter, "_get_allowed_channels", lambda: {"999"})
+    monkeypatch.setattr(adapter, "_get_ignored_channels", lambda: set())
+
+    await adapter._on_discord_raw_reaction_add(_make_reaction_payload())
+
+    invoke.assert_not_called()
+    channel.fetch_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_reaction_add_allowed_channel_invokes_without_user_allowlist(
+    adapter, monkeypatch
+):
+    invoke = _install_reaction_hook(monkeypatch, [])
+    channel = _fake_reaction_channel(_fake_bot_message(), channel_id=123)
+    adapter._client = _client_with_channel(channel)
+    adapter._allowed_user_ids = set()
+    monkeypatch.setattr(adapter, "_get_allowed_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_get_ignored_channels", lambda: set())
+
+    await adapter._on_discord_raw_reaction_add(_make_reaction_payload())
+
+    invoke.assert_called_once()
+    channel.fetch_message.assert_awaited_once_with(456)
+
+
+@pytest.mark.asyncio
+async def test_raw_reaction_add_ignored_channel_does_not_fetch_message(
+    adapter, monkeypatch
+):
+    invoke = _install_reaction_hook(monkeypatch, [])
+    channel = _fake_reaction_channel(_fake_bot_message(), channel_id=123)
+    adapter._client = _client_with_channel(channel)
+    monkeypatch.setattr(adapter, "_get_allowed_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_get_ignored_channels", lambda: {"123"})
+
+    await adapter._on_discord_raw_reaction_add(_make_reaction_payload())
+
+    invoke.assert_not_called()
+    channel.fetch_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_raw_reaction_add_hook_send_message_sends_followup(adapter, monkeypatch):
     _install_reaction_hook(
         monkeypatch,
@@ -275,5 +328,3 @@ async def test_raw_reaction_add_hook_remove_user_reaction_removes_when_resolvabl
     await adapter._on_discord_raw_reaction_add(_make_reaction_payload(member=member))
 
     message.remove_reaction.assert_awaited_once_with("\u2705", member)
-
-

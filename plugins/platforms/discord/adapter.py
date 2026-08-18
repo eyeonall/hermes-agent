@@ -3346,6 +3346,50 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception:
             return False
 
+    def _discord_raw_reaction_authorized(
+        self,
+        payload: Any,
+        channel: Any,
+        user_id: str,
+    ) -> bool:
+        """Apply Discord channel/user gates to raw reaction hook dispatch."""
+        is_dm = isinstance(channel, discord.DMChannel)
+        channel_keys: Optional[set[str]] = None
+        guild = getattr(channel, "guild", None)
+
+        if not is_dm:
+            parent_channel_id = self._get_parent_channel_id(channel)
+            channel_keys = self._discord_channel_keys_from_channel(channel, parent_channel_id)
+
+            allowed = self._get_allowed_channels()
+            if allowed and "*" not in allowed and not (channel_keys & allowed):
+                logger.debug("[%s] Ignoring reaction in non-allowed channel: %s", self.name, channel_keys)
+                return False
+
+            ignored = self._get_ignored_channels()
+            if "*" in ignored or (channel_keys & ignored):
+                logger.debug("[%s] Ignoring reaction in ignored channel: %s", self.name, channel_keys)
+                return False
+
+            if guild is None:
+                guild_id = getattr(payload, "guild_id", None)
+                if guild_id is not None and self._client is not None:
+                    get_guild = getattr(self._client, "get_guild", None)
+                    if callable(get_guild):
+                        try:
+                            guild = get_guild(int(guild_id))
+                        except Exception:
+                            guild = None
+
+        author = getattr(payload, "member", None)
+        return self._is_allowed_user(
+            user_id,
+            author=author,
+            guild=guild,
+            is_dm=is_dm,
+            channel_ids=channel_keys if not is_dm else None,
+        )
+
     async def _on_discord_raw_reaction_add(self, payload: Any) -> None:
         """Dispatch user-added Discord reactions to subscribed plugins."""
         if not self._client or not self._discord_reaction_action_hooks_subscribed():
@@ -3368,6 +3412,8 @@ class DiscordAdapter(BasePlatformAdapter):
             if channel is None:
                 channel = await self._client.fetch_channel(int(channel_id))
             if channel is None or not hasattr(channel, "fetch_message"):
+                return
+            if not self._discord_raw_reaction_authorized(payload, channel, user_id):
                 return
             message = await channel.fetch_message(int(message_id))
             if message is None:

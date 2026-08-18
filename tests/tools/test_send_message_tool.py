@@ -494,7 +494,7 @@ class TestSendToPlatformChunking:
         send = AsyncMock(return_value={"success": True, "message_id": "1"})
         add_reaction = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "tools.send_message_tool._discord_add_manifest_reaction_with_retry",
+            "plugins.platforms.discord.reaction_delivery.add_manifest_reaction_with_retry",
             add_reaction,
         )
 
@@ -527,7 +527,7 @@ class TestSendToPlatformChunking:
 
         add_reaction = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "tools.send_message_tool._discord_add_manifest_reaction_with_retry",
+            "plugins.platforms.discord.reaction_delivery.add_manifest_reaction_with_retry",
             add_reaction,
         )
         original = "visible [HERMES_REACTION_ACTIONS] {not json"
@@ -556,7 +556,7 @@ class TestSendToPlatformChunking:
 
         add_reaction = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "tools.send_message_tool._discord_add_manifest_reaction_with_retry",
+            "plugins.platforms.discord.reaction_delivery.add_manifest_reaction_with_retry",
             add_reaction,
         )
         manifest = {
@@ -601,7 +601,7 @@ class TestSendToPlatformChunking:
 
         add_reaction = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "tools.send_message_tool._discord_add_manifest_reaction_with_retry",
+            "plugins.platforms.discord.reaction_delivery.add_manifest_reaction_with_retry",
             add_reaction,
         )
         manifest = {

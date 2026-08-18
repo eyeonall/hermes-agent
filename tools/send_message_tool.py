@@ -11,7 +11,6 @@ import logging
 import os
 import re
 import time
-from urllib.parse import quote
 
 
 from agent.redact import redact_sensitive_text
@@ -80,94 +79,6 @@ _CAPTIONABLE_EXTS = _IMAGE_EXTS | _VIDEO_EXTS | {
     ".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".xlsx", ".zip",
 }
 
-
-def _discord_reaction_route_emoji(emoji: str) -> str:
-    """Return the URL path segment Discord expects for a reaction emoji."""
-    emoji = (emoji or "").strip()
-    custom = re.fullmatch(r"<a?:([^:<>]+):(\d+)>", emoji)
-    if custom:
-        emoji = f"{custom.group(1)}:{custom.group(2)}"
-    return quote(emoji, safe="")
-
-
-async def _discord_add_manifest_reaction_with_retry(
-    pconfig,
-    chat_id: str,
-    message_id: str,
-    emoji: str,
-    *,
-    max_attempts: int = 3,
-) -> str | None:
-    """Best-effort REST reaction add for out-of-process Discord sends."""
-    try:
-        import aiohttp
-    except ImportError:
-        return "Discord reaction add skipped: aiohttp not installed"
-
-    token = (getattr(pconfig, "token", None) or "").strip()
-    if not token:
-        token = (get_secret("DISCORD_BOT_TOKEN", "") or "").strip()
-    if not token:
-        return "Discord reaction add skipped: DISCORD_BOT_TOKEN is not set"
-
-    try:
-        from gateway.platforms.base import resolve_proxy_url, proxy_kwargs_for_aiohttp
-
-        proxy_url = resolve_proxy_url(platform_env_var="DISCORD_PROXY")
-        session_kwargs, request_kwargs = proxy_kwargs_for_aiohttp(proxy_url)
-    except Exception:
-        session_kwargs, request_kwargs = {}, {}
-
-    route_emoji = _discord_reaction_route_emoji(emoji)
-    url = (
-        "https://discord.com/api/v10/channels/"
-        f"{chat_id}/messages/{message_id}/reactions/{route_emoji}/@me"
-    )
-    headers = {"Authorization": f"Bot {token}"}
-
-    for attempt in range(max_attempts):
-        try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=15),
-                **session_kwargs,
-            ) as session:
-                async with session.put(url, headers=headers, **request_kwargs) as resp:
-                    if resp.status in {200, 204}:
-                        return None
-                    if resp.status == 429 and attempt < max_attempts - 1:
-                        retry_after = None
-                        try:
-                            body = await resp.json()
-                            retry_after = float(body.get("retry_after"))
-                        except Exception:
-                            for header in ("Retry-After", "X-RateLimit-Reset-After"):
-                                try:
-                                    retry_after = float(resp.headers.get(header))
-                                    break
-                                except Exception:
-                                    continue
-                        if retry_after is None:
-                            retry_after = 1.0
-                        await asyncio.sleep(max(0.0, min(retry_after, 10.0)))
-                        continue
-                    try:
-                        body = await resp.text()
-                    except Exception:
-                        body = ""
-                    detail = f": {body[:200]}" if body else ""
-                    return (
-                        "Discord reaction add failed "
-                        f"for message {message_id} emoji {emoji} ({resp.status}){detail}"
-                    )
-        except Exception as exc:
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(0.5)
-                continue
-            return (
-                "Discord reaction add failed "
-                f"for message {message_id} emoji {emoji}: {type(exc).__name__}: {exc}"
-            )
-    return f"Discord reaction add failed for message {message_id} emoji {emoji}"
 
 # Per-platform native caption length limits (characters). Text longer than
 # the limit can't ride on the media bubble and stays a separate body message.
@@ -1068,33 +979,15 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
         except Exception:
             pass
 
-    discord_manifest = None
-    discord_manifest_messages = []
-    message_for_sending = message
-    if platform == Platform.DISCORD:
-        try:
-            from plugins.platforms.discord.reaction_manifest import (
-                extract_reaction_manifest,
-                manifest_discord_messages,
-            )
-
-            message_for_sending, discord_manifest = extract_reaction_manifest(message)
-            discord_manifest_messages = manifest_discord_messages(discord_manifest)
-        except Exception:
-            logger.debug("Failed to parse Discord reaction manifest", exc_info=True)
-            discord_manifest = None
-            discord_manifest_messages = []
-            message_for_sending = message
-
     # Smart-chunk the message to fit within platform limits.
     # For short messages or platforms without a known limit this is a no-op.
     # Telegram measures length in UTF-16 code units, not Unicode codepoints.
     max_len = _MAX_LENGTHS.get(platform)
     if max_len:
         _len_fn = utf16_len if platform == Platform.TELEGRAM else None
-        chunks = BasePlatformAdapter.truncate_message(message_for_sending, max_len, len_fn=_len_fn)
+        chunks = BasePlatformAdapter.truncate_message(message, max_len, len_fn=_len_fn)
     else:
-        chunks = [message_for_sending]
+        chunks = [message]
 
     # --- Telegram: special handling for media attachments ---
     # _send_telegram now owns text chunking internally — it formats the full
@@ -1122,125 +1015,25 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     # historically went straight to the HTTP path; we preserve that by
     # explicitly invoking the registry hook here so behavior is unchanged.
     if platform == Platform.DISCORD:
-        from plugins.platforms.discord.reaction_manifest import (
-            choose_reaction_message_index,
-            manifest_actions,
+        from plugins.platforms.discord.reaction_delivery import (
+            send_standalone_discord_with_manifest,
         )
         from gateway.platform_registry import platform_registry
+
         entry = platform_registry.get("discord")
         if entry is None or entry.standalone_sender_fn is None:
             return {"error": "Discord plugin not registered or missing standalone_sender_fn"}
-
-        async def _attach_manifest_actions(actions, sent_messages):
-            warnings = []
-            for action in actions:
-                index = choose_reaction_message_index(action, sent_messages)
-                if index is None:
-                    continue
-                sent = sent_messages[index]
-                message_id = sent.get("message_id")
-                emoji = action.get("emoji")
-                if not message_id or not isinstance(emoji, str) or not emoji.strip():
-                    continue
-                warning = await _discord_add_manifest_reaction_with_retry(
-                    pconfig,
-                    chat_id,
-                    str(message_id),
-                    emoji,
-                )
-                if warning:
-                    warnings.append(warning)
-            return warnings
-
-        def _merge_warnings(result, warnings):
-            if warnings and isinstance(result, dict):
-                existing = result.get("warnings")
-                if isinstance(existing, list):
-                    result["warnings"] = [*existing, *warnings]
-                elif existing:
-                    result["warnings"] = [existing, *warnings]
-                else:
-                    result["warnings"] = warnings
-            return result
-
-        if discord_manifest_messages and not media_files:
-            last_result = None
-            sent_messages = []
-            warnings = []
-            for item in discord_manifest_messages:
-                item_chunks = BasePlatformAdapter.truncate_message(
-                    item["content"],
-                    max_len or _DEFAULT_CAPTION_LIMIT,
-                )
-                item_sent = []
-                for chunk in item_chunks:
-                    if not chunk.strip():
-                        continue
-                    result = await entry.standalone_sender_fn(
-                        pconfig,
-                        chat_id,
-                        chunk,
-                        thread_id=thread_id,
-                        media_files=[],
-                    )
-                    if isinstance(result, dict) and result.get("error"):
-                        return result
-                    last_result = result
-                    message_id = result.get("message_id") if isinstance(result, dict) else None
-                    if message_id:
-                        record = {"content": chunk, "message_id": message_id}
-                        item_sent.append(record)
-                        sent_messages.append(record)
-                warnings.extend(await _attach_manifest_actions(item.get("actions", []), item_sent))
-            warnings.extend(await _attach_manifest_actions(manifest_actions(discord_manifest), sent_messages))
-            if last_result is None:
-                last_result = {"error": "Discord reaction manifest did not contain deliverable text"}
-            return _merge_warnings(last_result, warnings)
-
-        # MEDIA:<path> caption: single captionable file + short text rides as
-        # the media message content instead of a separate message before the
-        # attachment (single enforced decision in _media_caption_split). Cap on
-        # the platform's own message limit so the caption is always deliverable.
-        _dc_caption, _ = _media_caption_split(
-            message_for_sending, media_files,
-            max_caption_len=(max_len or _DEFAULT_CAPTION_LIMIT),
+        return await send_standalone_discord_with_manifest(
+            pconfig=pconfig,
+            chat_id=chat_id,
+            message=message,
+            thread_id=thread_id,
+            media_files=media_files,
+            max_len=max_len,
+            default_caption_limit=_DEFAULT_CAPTION_LIMIT,
+            caption_split=_media_caption_split,
+            standalone_sender_fn=entry.standalone_sender_fn,
         )
-        if _dc_caption is not None:
-            result = await entry.standalone_sender_fn(
-                pconfig,
-                chat_id,
-                "",
-                thread_id=thread_id,
-                media_files=media_files,
-                caption=_dc_caption,
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            sent_messages = []
-            message_id = result.get("message_id") if isinstance(result, dict) else None
-            if message_id:
-                sent_messages.append({"content": _dc_caption, "message_id": message_id})
-            warnings = await _attach_manifest_actions(manifest_actions(discord_manifest), sent_messages)
-            return _merge_warnings(result, warnings)
-        last_result = None
-        sent_messages = []
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await entry.standalone_sender_fn(
-                pconfig,
-                chat_id,
-                chunk,
-                thread_id=thread_id,
-                media_files=media_files if is_last else [],
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-            message_id = result.get("message_id") if isinstance(result, dict) else None
-            if message_id:
-                sent_messages.append({"content": chunk, "message_id": message_id})
-        warnings = await _attach_manifest_actions(manifest_actions(discord_manifest), sent_messages)
-        return _merge_warnings(last_result, warnings)
 
     # --- Matrix: route ALL sends through the native adapter so text is
     # encrypted in E2EE rooms too (issue: text-only sends arrived with a red

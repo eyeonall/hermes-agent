@@ -4260,6 +4260,17 @@ def _is_connection_error(exc: Exception) -> bool:
     return False
 
 
+def _title_timeout_should_stop(task: Optional[str], exc: Exception) -> bool:
+    """Title generation is cosmetic; a timeout should not amplify load.
+
+    Other auxiliary tasks may need provider retries or fallback to preserve
+    work. A session title already has a deterministic derived fallback, so a
+    full-budget timeout means "keep the derived title" rather than "send more
+    requests, possibly to the main model."
+    """
+    return task == "title_generation" and _is_timeout_error(exc)
+
+
 def _is_transient_transport_error(exc: Exception) -> bool:
     """Return True for a one-off transport blip worth retrying ON the
     same provider before any provider/model fallback.
@@ -8543,6 +8554,7 @@ def _build_call_kwargs(
             or base_url_host_matches(_effective_base, "integrate.api.nvidia.com")
         )
         _is_moa = bool(task) and str(task) == "moa_reference"
+        _is_title_generation = bool(task) and str(task) == "title_generation"
         # Gemini's native generateContent maps max_tokens → maxOutputTokens and,
         # when it is omitted, applies a fixed 65,535-token ceiling rather than
         # "the model's full budget" (see gemini_native_adapter.build_gemini_request).
@@ -8568,6 +8580,7 @@ def _build_call_kwargs(
             or _nous_on_messages
             or _is_nvidia_nim
             or _is_moa
+            or _is_title_generation
             or _is_gemini_native
         ):
             # Use auxiliary_max_tokens_param() so models that require
@@ -9531,7 +9544,14 @@ def _call_llm_impl(
             # same-provider retry for compression on a full-budget timeout and
             # fall straight through to provider/model fallback; fast blips (a
             # streaming-close or a 5xx) still retry, since those are cheap.
-            if task == "compression" and _is_timeout_error(transient_err):
+            if task in {"compression", "title_generation"} and _is_timeout_error(transient_err):
+                if task == "title_generation":
+                    logger.info(
+                        "Auxiliary title_generation: timeout; skipping "
+                        "same-provider retry and fallback: %s",
+                        transient_err,
+                    )
+                    raise
                 logger.info(
                     "Auxiliary compression: timeout on the critical path; "
                     "skipping same-provider retry and falling back: %s",
@@ -9574,6 +9594,17 @@ def _call_llm_impl(
             # Retries exhausted — fall through to first_err fallback handling.
             raise _last_transient
     except Exception as first_err:
+        if _title_timeout_should_stop(task, first_err):
+            if _is_connection_error(first_err):
+                try:
+                    _evict_cached_client_instance(client)
+                except Exception:
+                    logger.debug(
+                        "Auxiliary title_generation: cache eviction after timeout failed",
+                        exc_info=True,
+                    )
+            raise
+
         if "temperature" in kwargs and _is_unsupported_temperature_error(first_err):
             retry_kwargs = dict(kwargs)
             retry_kwargs.pop("temperature", None)
@@ -10301,7 +10332,14 @@ async def _async_call_llm_impl(
             # See call_llm(): compression is on the critical preflight path,
             # so skip the same-provider retry on a full-budget timeout and
             # fall straight through to fallback (issue #54465).
-            if task == "compression" and _is_timeout_error(transient_err):
+            if task in {"compression", "title_generation"} and _is_timeout_error(transient_err):
+                if task == "title_generation":
+                    logger.info(
+                        "Auxiliary title_generation (async): timeout; skipping "
+                        "same-provider retry and fallback: %s",
+                        transient_err,
+                    )
+                    raise
                 logger.info(
                     "Auxiliary compression (async): timeout on the critical "
                     "path; skipping same-provider retry and falling back: %s",
@@ -10323,6 +10361,17 @@ async def _async_call_llm_impl(
                 ),
                 task)
     except Exception as first_err:
+        if _title_timeout_should_stop(task, first_err):
+            if _is_connection_error(first_err):
+                try:
+                    _evict_cached_client_instance(client)
+                except Exception:
+                    logger.debug(
+                        "Auxiliary title_generation (async): cache eviction after timeout failed",
+                        exc_info=True,
+                    )
+            raise
+
         if "temperature" in kwargs and _is_unsupported_temperature_error(first_err):
             retry_kwargs = dict(kwargs)
             retry_kwargs.pop("temperature", None)

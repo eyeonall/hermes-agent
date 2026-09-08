@@ -1057,6 +1057,7 @@ DEFAULT_CONFIG = {
             "prefer_fast_model": False,  # opt in to provider fast tier; auto otherwise uses the main model
             "base_url": "",
             "api_key": "",
+            # Title generation is cosmetic; keep provider stalls bounded.
             "timeout": 10,
             # Cosmetic background work: never let automatic titles occupy every
             # slot on a shared local model server.

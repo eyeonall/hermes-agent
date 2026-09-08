@@ -162,3 +162,29 @@ def test_async_title_generation_timeout_does_not_retry_or_fallback():
 
     asyncio.run(run())
     assert client.chat.completions.create.call_count == 1
+
+
+def test_title_generation_without_output_cap_does_not_inject_one():
+    """Omitting a title cap must not silently request a provider default cap."""
+    from agent.auxiliary_client import call_llm
+
+    client = MagicMock()
+    client.base_url = "http://localhost:13305/v1"
+    client.chat.completions.create.return_value = MagicMock()
+
+    with (
+        patch("agent.auxiliary_client._resolve_task_provider_model",
+              return_value=("custom", "tiny-title-model", None, None, None)),
+        patch("agent.auxiliary_client._get_cached_client",
+              return_value=(client, "tiny-title-model")),
+        patch("agent.auxiliary_client._validate_llm_response",
+              side_effect=lambda response, _task, **_kwargs: response),
+    ):
+        call_llm(
+            task="title_generation",
+            messages=[{"role": "user", "content": "title"}],
+        )
+
+    call_kwargs = client.chat.completions.create.call_args.kwargs
+    assert "max_tokens" not in call_kwargs
+    assert "max_completion_tokens" not in call_kwargs

@@ -328,6 +328,20 @@ DEFAULT_CONFIG = {
         # matches a key in this dict.
         # Edit directly in config.yaml (no CLI support due to dots in keys).
         "reasoning_overrides": {},
+
+        # Per-provider opt-in to preserve assistant ``reasoning_content``
+        # when replaying history.  The built-in echo families (DeepSeek,
+        # Kimi/Moonshot, Xiaomi MiMo) are auto-detected by provider name
+        # and base-URL host.  Custom providers and OpenAI-compatible
+        # gateways that proxy those same models (or other thinking-mode
+        # backends) are not covered by the host-based rules.
+        #
+        # Set ``reasoning_echo: true`` on a ``model:`` entry (primary) or a
+        # ``fallback_providers:`` entry (per-fallback) to preserve
+        # ``reasoning_content`` on replay for that provider only.  Default
+        # ``false`` keeps the historical strict-provider behavior (Mistral,
+        # Groq, Cerebras reject the field with HTTP 400).
+        "reasoning_echo": False,
     },
 
     "terminal": {
@@ -1043,7 +1057,10 @@ DEFAULT_CONFIG = {
             "prefer_fast_model": False,  # opt in to provider fast tier; auto otherwise uses the main model
             "base_url": "",
             "api_key": "",
-            "timeout": 30,
+            "timeout": 10,
+            # Cosmetic background work: never let automatic titles occupy every
+            # slot on a shared local model server.
+            "max_concurrency": 1,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
             "language": "",

@@ -721,7 +721,11 @@ DEFAULT_CONFIG = {
             "prefer_fast_model": False,
             "base_url": "",
             "api_key": "",
-            "timeout": 30,
+            # Title generation is cosmetic; keep provider stalls bounded.
+            "timeout": 10,
+            # Cosmetic background work: never let automatic titles occupy every
+            # slot on a shared local model server.
+            "max_concurrency": 1,
             "extra_body": {},
             "reasoning_effort": "",
             "language": "",

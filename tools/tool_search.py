@@ -142,12 +142,16 @@ _DEFAULT_DEFERRED_TOOLS = frozenset({
 
 def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) -> bool:
     """True if a tool is *eligible* for deferral: named in ``defer_tools`` (curated set or
-    user override), OR an MCP tool, OR neither core nor a session-gated GUI surface (i.e. a
-    plugin tool). Bridge names never defer."""
+    user override), explicitly deferred at registration, OR an MCP tool, OR neither core nor a
+    session-gated GUI surface (i.e. a plugin tool). A plugin may explicitly keep one entry point
+    direct with ``defer=False``; bridge names never defer."""
     if name in BRIDGE_TOOL_NAMES:
         return False
     if defer_tools is not None and name in defer_tools:
         return True
+    registered_defer = getattr(_registry_entry(name), "defer", None)
+    if isinstance(registered_defer, bool):
+        return registered_defer
     if name in _core_tool_names():
         return False
     toolset = _registry_toolset(name)  # None (unregistered/malformed) never defers

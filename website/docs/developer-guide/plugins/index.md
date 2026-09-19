@@ -559,7 +559,12 @@ def register(ctx):
 
 **What `register()` does:**
 - Called exactly once at startup
-- `ctx.register_tool()` puts your tool in the registry — the model sees it immediately
+- `ctx.register_tool()` puts your tool in the registry; plugin tools are reachable through
+  progressive disclosure by default
+- Plugin tools use progressive disclosure by default. For one latency-critical, frequently used
+  entry point whose schema must be available on the first model turn, pass `defer=False`; keep
+  sibling tools deferred so their schemas do not inflate every request. An operator's explicit
+  `tools.tool_search.defer` configuration still takes precedence.
 - `ctx.register_hook()` subscribes to lifecycle events
 - `ctx.register_cli_command()` registers a CLI subcommand (e.g. `hermes my-plugin <subcommand>`)
 - `ctx.register_command()` registers an in-session slash command (e.g. `/myplugin <args>` inside CLI / gateway chat) — see [Register slash commands](#register-slash-commands) below

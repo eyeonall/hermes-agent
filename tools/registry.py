@@ -190,6 +190,10 @@ class ToolEntry:
     is_async: bool
     description: str
     emoji: str
+    # ``False`` keeps one latency-critical plugin entry point in the direct model
+    # schema while sibling plugin tools retain progressive disclosure. ``None``
+    # preserves the toolset-derived default; operator config may still force defer.
+    defer: Optional[bool] = None
     max_result_size_chars: int | float | None = None
     # Zero-arg callable whose dict is shallow-merged onto the schema at every get_definitions()
     # — for fields tracking runtime config (delegate_task's description reflects limits).
@@ -649,7 +653,8 @@ class ToolRegistry:
     def register(
         self, name: str, toolset: str, schema: dict, handler: Callable,
         check_fn: Callable = None, requires_env: list = None, is_async: bool = False,
-        description: str = "", emoji: str = "", max_result_size_chars: int | float | None = None,
+        description: str = "", emoji: str = "", defer: bool | None = None,
+        max_result_size_chars: int | float | None = None,
         dynamic_schema_overrides: Callable = None, override: bool = False,
         scope: Optional[str] = None):
         """Register a tool (called at import time by each tool file). ``override=True`` is an
@@ -666,6 +671,8 @@ class ToolRegistry:
             raise ValueError(
                 f"Tool {name!r}: schema['parameters'] must be an object (JSON Schema dict), "
                 f"got {type(params).__name__}")
+        if defer is not None and not isinstance(defer, bool):
+            raise TypeError(f"Tool {name!r}: defer must be bool or None")
         handler_owner = self._plugin_owner_of(handler)
         caller_owner = self._plugin_namespace_of_module(self._caller_module())
         owner = caller_owner or handler_owner
@@ -714,6 +721,7 @@ class ToolRegistry:
                 name=name, toolset=toolset, schema=schema, handler=handler, check_fn=check_fn,
                 requires_env=requires_env or [], is_async=is_async,
                 description=description or schema.get("description", ""), emoji=emoji,
+                defer=defer,
                 max_result_size_chars=max_result_size_chars,
                 dynamic_schema_overrides=dynamic_schema_overrides)
             # Availability is derived per-tool (_toolset_has_exposable_tools), so this map no

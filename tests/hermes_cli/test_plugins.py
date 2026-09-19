@@ -1991,6 +1991,55 @@ class TestPluginContext:
 class TestPluginToolVisibility:
     """Plugin-registered tools appear in get_tool_definitions()."""
 
+    def test_plugin_can_keep_one_latency_critical_tool_direct(self, tmp_path, monkeypatch):
+        """A plugin may keep one concrete entry point direct while its other tools defer."""
+        import hermes_cli.plugins as plugins_mod
+
+        hermes_home = tmp_path / "hermes_test"
+        plugin_dir = hermes_home / "plugins" / "direct_plugin"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.yaml").write_text(
+            yaml.dump({"name": "direct_plugin"}), encoding="utf-8")
+        (plugin_dir / "__init__.py").write_text(
+            'def register(ctx):\n'
+            '    schema = lambda name: {"name": name, "description": name, '
+            '"parameters": {"type": "object", "properties": {}}}\n'
+            '    ctx.register_tool(name="direct_lookup", toolset="plugin_direct_plugin", '
+            'schema=schema("direct_lookup"), handler=lambda args, **kw: "ok", defer=False)\n'
+            '    ctx.register_tool(name="deferred_action", toolset="plugin_direct_plugin", '
+            'schema=schema("deferred_action"), handler=lambda args, **kw: "ok")\n',
+            encoding="utf-8",
+        )
+        (hermes_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "plugins": {"enabled": ["direct_plugin"]},
+                "tools": {"tool_search": {"enabled": "on"}},
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        mgr = PluginManager()
+        mgr.discover_and_load()
+        monkeypatch.setattr(plugins_mod, "_plugin_manager", mgr)
+
+        from model_tools import get_tool_definitions
+
+        tools = get_tool_definitions(
+            enabled_toolsets=["plugin_direct_plugin"], quiet_mode=True)
+        names = {tool["function"]["name"] for tool in tools}
+        search = next(tool for tool in tools if tool["function"]["name"] == "tool_search")
+
+        assert "direct_lookup" in names
+        assert "deferred_action" not in names
+        assert "deferred_action" in search["function"]["description"]
+        assert "direct_lookup" not in search["function"]["description"]
+
+        from tools.tool_search import is_deferrable_tool_name
+
+        assert is_deferrable_tool_name(
+            "direct_lookup", frozenset({"direct_lookup"}))
+
     def test_plugin_tools_in_definitions(self, tmp_path, monkeypatch):
         """Plugin tools are reachable when their toolset is in enabled_toolsets.
 

@@ -1,5 +1,7 @@
-"""``hermes chat`` session-argument steps split out of ``hermes_cli.main``: ``--in DIR``, ``--resume
-@claude/@codex`` imports, and recreating a removed ``--tui -w`` worktree a resumed session needs (N8)."""
+"""Session-name and ``hermes chat`` resume arguments split out of ``hermes_cli.main``.
+
+Includes ``--in DIR``, foreign-session imports, and resumed TUI worktree recovery.
+"""
 
 import os
 import sys
@@ -33,6 +35,44 @@ def apply_in_dir(args) -> None:
     if os.environ.get("TERMINAL_CWD", "").strip():
         os.environ["TERMINAL_CWD"] = _target_dir
     args.no_restore_cwd = True
+
+
+def _coalesce_session_name_args(argv: list) -> list:
+    """Join unquoted multi-word session names after -c/--continue and -r/--resume: ``hermes -c Pokemon
+    Agent Dev`` → ``['-c', 'Pokemon Agent Dev']``, up to the next flag or known top-level subcommand."""
+    _SUBCOMMANDS = {
+        "chat", "infer", "model", "gateway", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
+        "auth", "status", "cron", "doctor", "config", "pairing", "skills", "tools", "mcp",
+        "sessions", "insights", "update", "uninstall", "profile", "dashboard", "serve", "webapp",
+        "desktop", "gui", "claw", "plugins", "security", "acp", "webhook", "peer",
+        "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage",
+    }
+    _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
+    if _SESSION_FLAGS.intersection(argv):  # the active memory provider registers ``hermes <name>``
+        from plugins.memory import active_memory_provider_commands
+        _SUBCOMMANDS |= active_memory_provider_commands()
+
+    result = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token in _SESSION_FLAGS:
+            result.append(token)
+            i += 1
+            parts: list = []
+            while (
+                i < len(argv)
+                and not argv[i].startswith("-")
+                and argv[i] not in _SUBCOMMANDS
+            ):
+                parts.append(argv[i])
+                i += 1
+            if parts:
+                result.append(" ".join(parts))
+        else:
+            result.append(token)
+            i += 1
+    return result
 
 
 def import_foreign_resume(args) -> None:
